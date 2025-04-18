@@ -4,8 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_database/firebase_database.dart';
 
-import '../services/database_services.dart';
-
 class ChatScreen extends StatefulWidget {
   final String userId;
   final String name;
@@ -23,9 +21,11 @@ class ChatScreen extends StatefulWidget {
 }
 
 class _ChatScreenState extends State<ChatScreen> {
-  final DatabaseService _dbService = DatabaseService();
   final TextEditingController _messageController = TextEditingController();
   final FirebaseAuth _auth = FirebaseAuth.instance;
+  final FirebaseDatabase _db = FirebaseDatabase.instance;
+
+  final ScrollController _scrollController = ScrollController();
 
   late String _chatId;
   List<Map<String, dynamic>> _messages = [];
@@ -41,22 +41,37 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   String _generateChatId(String uid1, String uid2) {
-    return uid1.hashCode <= uid2.hashCode ? '$uid1\_$uid2' : '$uid2\_$uid1';
+    return uid1.hashCode <= uid2.hashCode ? '${uid1}_$uid2' : '${uid2}_$uid1';
   }
 
   void _listenForMessages() {
-    _dbService.getMessages(_chatId).listen((event) {
+    _db
+        .ref("chats/$_chatId")
+        .orderByChild("timestamp")
+        .onValue
+        .listen((event) {
       final data = event.snapshot.value as Map<dynamic, dynamic>? ?? {};
       final messages = data.entries.map((entry) {
         final msg = Map<String, dynamic>.from(entry.value);
         return {
           'senderId': msg['senderId'],
           'text': msg['text'],
+          'timestamp': msg['timestamp'] ?? 0,
         };
       }).toList();
 
+      // Sort messages by timestamp (just to be extra sure)
+      messages.sort((a, b) => (a['timestamp'] as int).compareTo(b['timestamp'] as int));
+
       setState(() {
         _messages = messages;
+      });
+
+      // Auto-scroll to the bottom
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_scrollController.hasClients) {
+          _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+        }
       });
     });
   }
@@ -64,11 +79,13 @@ class _ChatScreenState extends State<ChatScreen> {
   void _sendMessage() async {
     final currentUser = _auth.currentUser;
     if (currentUser != null && _messageController.text.trim().isNotEmpty) {
-      await _dbService.sendMessage(
-        _chatId,
-        currentUser.uid,
-        _messageController.text.trim(),
-      );
+      final messageRef = _db.ref("chats/$_chatId").push();
+      await messageRef.set({
+        'senderId': currentUser.uid,
+        'text': _messageController.text.trim(),
+        'timestamp': ServerValue.timestamp,
+      });
+
       _messageController.clear();
     }
   }
@@ -81,14 +98,13 @@ class _ChatScreenState extends State<ChatScreen> {
         children: [
           Expanded(
             child: ListView.builder(
+              controller: _scrollController,
               itemCount: _messages.length,
               itemBuilder: (context, index) {
                 final message = _messages[index];
-                final isMe =
-                    message['senderId'] == _auth.currentUser?.uid;
+                final isMe = message['senderId'] == _auth.currentUser?.uid;
                 return Align(
-                  alignment:
-                  isMe ? Alignment.centerRight : Alignment.centerLeft,
+                  alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
                   child: Container(
                     padding: const EdgeInsets.all(10),
                     margin: const EdgeInsets.all(5),
@@ -112,6 +128,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   controller: _messageController,
                   decoration: const InputDecoration(
                     hintText: 'Type a message...',
+                    contentPadding: EdgeInsets.symmetric(horizontal: 12),
                   ),
                 ),
               ),
