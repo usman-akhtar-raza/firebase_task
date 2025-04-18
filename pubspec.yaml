@@ -41,7 +41,7 @@ dependencies:
   get:
   flutter_local_notifications:
   flutter_chat_bubble:
-  fluter toast:
+  flutter_styled_toast:
 
 dev_dependencies:
   flutter_test:
